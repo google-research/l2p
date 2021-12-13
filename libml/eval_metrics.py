@@ -1,0 +1,29 @@
+# coding=utf-8
+# Copyright 2020 The Learning-to-Prompt Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific Learning-to-Prompt governing permissions and
+# limitations under the License.
+# ==============================================================================
+"""Generate evaluation metrics for each task."""
+
+from clu import metrics  # pylint: disable=unused-import
+import flax  # pylint: disable=unused-import
+
+# temporary workaround, # tasks could not exceed 1000 at the moment
+for i in range(1000):
+  exec(  # pylint: disable=exec-used
+      f"@flax.struct.dataclass\n"
+      f"class EvalMetrics_{i}(metrics.Collection):\n"
+      f"  accuracy_{i}: metrics.Accuracy\n"
+      f"  eval_loss_{i}: metrics.Average.from_output(\"loss\")")
+
+EvalMetrics_list = [globals()[f"EvalMetrics_{i}"] for i in range(1000)]

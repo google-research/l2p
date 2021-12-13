@@ -1,0 +1,10 @@
+absl-py
+clu==0.0.6
+flax==0.3.4
+jax==0.2.14
+jaxlib==0.1.67  # The jaxlib version must correspond to the version of the existing CUDA installation
+ml_collections
+numpy
+tensorflow-cpu==2.5.0
+tensorflow-datasets==4.3.0
+tensorflow_addons==0.13.0
