@@ -8,6 +8,8 @@ L2P is a novel continual learning technique which learns to dynamically prompt a
 
 Code is written by Zifeng Wang. Acknowledgement to https://github.com/google-research/nested-transformer.
 
+This is not an officially supported Google product.
+
 ## Enviroment setup
 ```
 pip install -r requirements.txt
@@ -37,10 +39,27 @@ Note: we run our experiments using 8 V100 GPUs or 4 TPUs, and we specify a per d
 
 
 ## Visualize results
-TODO(zifengw): Add instructions and metrics explanation.
+We use tensorboard to visualize the result. For example, if the working directory specified to run L2P is `workdir=./cifar100_l2p`, the command to check result is as follows:
+
 ```
+tensorboard --logdir ./cifar100_l2p
 ```
+Here are the important metrics to keep track of, and their corresponding meanings:
+
+| Metric    | Description |
+| ----------- | ----------- |
+| accuracy_n      | Accuracy of the n-th task       |
+| forgetting   | Average forgetting up until the current task       |
+| avg_acc  | Average evaluation accuracy up until the current task      |
+
+
 
 ## Cite
-TODO(zifengw): Add bib.
-
+```
+@inproceedings{wang2021learning,
+  title={Learning to Prompt for Continual Learning},
+  author={Zifeng Wang and Zizhao Zhang and Chen-Yu Lee and Han Zhang and Ruoxi Sun and Xiaoqi Ren and Guolong Su and Vincent Perot and Jennifer Dy and Tomas Pfister},
+  booktitle={arXiv preprint},  # Update this after arxived.
+  year={2021}
+}
+```
