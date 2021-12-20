@@ -1,11 +1,9 @@
 # [Learning to Prompt for Continual Learning (L2P)](https://arxiv.org/pdf/2112.08654.pdf) Official Jax Implementation
 
-
-## Introduction
-![Alt text](./l2p_illustration.png?raw=true "Title")
-
 L2P is a novel continual learning technique which learns to dynamically prompt a pre-trained model to learn tasks sequentially under different task transitions. Different from mainstream rehearsal-based or architecture-based methods, L2P requires neither a rehearsal buffer nor test-time task identity. L2P can be generalized to various continual learning settings including the most challenging and realistic task-agnostic setting. L2P consistently outperforms prior state-of-the-art methods. Surprisingly, L2P achieves competitive results against rehearsal-based methods even without a rehearsal buffer.
-
+<p align="center">
+<img src="./l2p_illustration.png" width="850" height="320">
+</p>
 Code is written by Zifeng Wang. Acknowledgement to https://github.com/google-research/nested-transformer.
 
 This is not an officially supported Google product.
