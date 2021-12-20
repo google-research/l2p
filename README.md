@@ -1,4 +1,4 @@
-# [Learning to Prompt for Continual Learning (L2P)](tbd) Official Jax Implementation
+# [Learning to Prompt for Continual Learning (L2P)](https://arxiv.org/pdf/2112.08654.pdf) Official Jax Implementation
 
 
 ## Introduction
@@ -59,7 +59,7 @@ Here are the important metrics to keep track of, and their corresponding meaning
 @inproceedings{wang2021learning,
   title={Learning to Prompt for Continual Learning},
   author={Zifeng Wang and Zizhao Zhang and Chen-Yu Lee and Han Zhang and Ruoxi Sun and Xiaoqi Ren and Guolong Su and Vincent Perot and Jennifer Dy and Tomas Pfister},
-  booktitle={arXiv preprint},  # Update this after arxived.
+  booktitle={arXiv preprint arXiv:2112.08654},
   year={2021}
 }
 ```
