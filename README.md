@@ -12,7 +12,7 @@ This is not an officially supported Google product.
 ```
 pip install -r requirements.txt
 ```
-After this, you may need to adjust your jax version according to your cuda driver version so that jax correctly identifies your GPUs.
+After this, you may need to adjust your jax version according to your cuda driver version so that jax correctly identifies your GPUs (see [this issue](https://github.com/google/jax/issues/5231) for more details).
 For example, if your cuda version is 11.1, you need to run the following:
 ```
 pip install --upgrade jax==0.2.14 jaxlib==0.1.67+cuda111 -f https://storage.googleapis.com/jax-releases/jax_releases.html
