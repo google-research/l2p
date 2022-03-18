@@ -12,9 +12,14 @@ This is not an officially supported Google product.
 ```
 pip install -r requirements.txt
 ```
+After this, you may need to adjust your jax version according to your cuda driver version so that jax correctly identifies your GPUs.
+For example, if your cuda version is 11.1, you need to run the following:
+```
+pip install --upgrade jax==0.2.14 jaxlib==0.1.67+cuda111 -f https://storage.googleapis.com/jax-releases/jax_releases.html
+```
 
 ## Getting pretrained ViT model
-ViT-B/16 model used in this paper can be downloaded at [here](gs://vit_models/augreg/B_16-i21k-300ep-lr_0.001-aug_medium1-wd_0.1-do_0.0-sd_0.0.npz).
+ViT-B/16 model used in this paper can be downloaded at https://storage.googleapis.com/vit_models/imagenet21k/ViT-B_16.npz.
 
 
 ## Instructions on running L2P
@@ -24,13 +29,13 @@ We provide the configuration file to train and evaluate L2P on multiple benchmar
 To run our method on the Split CIFAR-100 dataset (class-incremental setting):
 
 ```
-python -m main.py --my_config configs/cifar100_l2p.py --workdir=./cifar100_l2p --my_config.init_checkpoint=<ViT-saved-path/ViT-B_16.npz>
+python main.py --my_config configs/cifar100_l2p.py --workdir=./cifar100_l2p --my_config.init_checkpoint=<ViT-saved-path/ViT-B_16.npz>
 ```
 
 To run our method on the more complex Gaussian Scheduled CIFAR-100 dataset (task-agnostic setting):
 
 ```
-python -m main.py --my_config configs/cifar100_gaussian_l2p.py --workdir=./cifar100_gaussian_l2p --my_config.init_checkpoint=<ViT-saved-path/ViT-B_16.npz>
+python main.py --my_config configs/cifar100_gaussian_l2p.py --workdir=./cifar100_gaussian_l2p --my_config.init_checkpoint=<ViT-saved-path/ViT-B_16.npz>
 ```
 
 Note: we run our experiments using 8 V100 GPUs or 4 TPUs, and we specify a per device batch size of 16 in the config files. This indicates that we use a total batch size of 128.
@@ -57,7 +62,7 @@ Here are the important metrics to keep track of, and their corresponding meaning
 @inproceedings{wang2021learning,
   title={Learning to Prompt for Continual Learning},
   author={Zifeng Wang and Zizhao Zhang and Chen-Yu Lee and Han Zhang and Ruoxi Sun and Xiaoqi Ren and Guolong Su and Vincent Perot and Jennifer Dy and Tomas Pfister},
-  booktitle={arXiv preprint arXiv:2112.08654},
-  year={2021}
+  booktitle={CVPR},
+  year={2022}
 }
 ```
