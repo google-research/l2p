@@ -23,7 +23,7 @@ pip install -r requirements.txt
 ```
 After this, you may need to adjust your jax version according to your cuda driver version so that jax correctly identifies your GPUs (see [this issue](https://github.com/google/jax/issues/5231) for more details).
 
-Note: The codebase has been throughly tested under the TPU enviroment using the newest JAX version. We are currently working on verifying the GPU environment.
+Note: The codebase has been throughly tested under the TPU enviroment using the newest JAX version. We are currently working on further verifying the GPU environment.
 
 ## Dataset preparation
 Before running experiments for 5-datasets and CORe50, additional dataset preparation step should be conducted as follows:
