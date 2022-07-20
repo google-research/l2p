@@ -19,24 +19,24 @@ import ml_collections
 
 
 def get_config():
-  """Return config files for L2P on Gaussian CIFAR100."""
+  """Return config files for L2P on 5-datasets."""
   config = ml_collections.ConfigDict()
-  config.model_name = "ViT-B_16"
+  config.model_name = "ViT-B_16"  # support various sized ViT models
   config.per_device_batch_size = 16
 
-  config.dataset = "cifar100"
+  config.dataset = "5datasets"
   # Gaussian schedule for cifar100
-  config.gaussian_schedule = True
+  config.gaussian_schedule = False
   config.gaussian_mode = ""
 
   config.offline_eval = False
   config.recreate_eval = False
-  config.reinit_optimizer = False
+  config.reinit_optimizer = True
   config.eval_last_only = False
   config.save_last_ckpt_only = True
 
   config.learning_rate = 0.03
-  config.optim = "adam"
+  config.optim = "adam"  # use "sgd" if unfreeze
   config.sgd_momentum = 0.9
   config.grad_clip_max_norm = 1.0
   config.learning_rate_schedule = "constant"
@@ -47,7 +47,6 @@ def get_config():
   config.eval_pad_last_batch = False
   config.log_loss_every_steps = 3
   config.eval_every_steps = -1
-  config.eval_per_epochs = 100
   config.checkpoint_every_steps = 5000
   config.shuffle_buffer_size = 10000
 
@@ -63,8 +62,8 @@ def get_config():
 
   # configuration for CL
   config.continual = ml_collections.ConfigDict()
-  config.continual.num_tasks = 200
-  config.continual.num_classes_per_task = 100
+  config.continual.num_tasks = 5
+  config.continual.num_classes_per_task = 10
   config.continual.rand_seed = -1
   config.continual.num_train_steps_per_task = -1
   config.continual.train_mask = True
@@ -97,15 +96,15 @@ def get_config():
   # configuration for L2P
   config.prompt_pool = True
   config.prompt_pool_param = ml_collections.ConfigDict()
-  config.prompt_pool_param.pool_size = 10
+  config.prompt_pool_param.pool_size = 20
   config.prompt_pool_param.length = 10
   config.prompt_pool_param.top_k = 4
   config.prompt_pool_param.initializer = "uniform"
   config.prompt_pool_param.prompt_key = True
-  config.prompt_pool_param.use_prompt_mask = False
+  config.prompt_pool_param.use_prompt_mask = True
   config.prompt_pool_param.mask_first_epoch = False
 
-  config.prompt_pool_param.shared_prompt_pool = False
+  config.prompt_pool_param.shared_prompt_pool = True
   config.prompt_pool_param.shared_prompt_key = False
   config.prompt_pool_param.batchwise_prompt = True
   config.prompt_pool_param.prompt_key_init = "uniform"
@@ -120,12 +119,20 @@ def get_config():
   config.subsample_rate = -1
   # key loss
   config.pull_constraint = True
-  config.pull_constraint_coeff = 1.0
+  config.pull_constraint_coeff = 0.5
 
   # prompt utils
-  config.prompt_histogram = False
+  config.prompt_histogram = True
   config.prompt_mask_mode = None
   config.save_prompts = False
 
+
+  # if doing replay trick, not that if using replay with L2P, make sure
+  # to set config.freeze_part = [], ie, not freezing for better adaptation
+  # config.continual.replay = ml_collections.ConfigDict()
+  # config.continual.replay.num_samples_per_task = 100
+  # config.continual.replay.include_new_task = True
+  # config.continual.replay_no_mask = True
+  # config.continual.replay_reverse_mask = False
 
   return config

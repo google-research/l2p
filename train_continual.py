@@ -264,6 +264,7 @@ def train_step(
         prompt_mask,
         task_id,
         cls_features,
+        batch["label"],
         mutable=["batch_stats"],
         rngs={"dropout": rng})
     logits = res["logits"]
@@ -272,8 +273,9 @@ def train_step(
       not_mask = np.setdiff1d(np.arange(num_total_class), class_mask)
       if config.continual.get("replay_no_mask"):
         # dev, bs, #class, where dev is implicit here
-        logits = logits.at[:config.per_device_batch_size,
-                           not_mask].set(-jnp.inf)
+        logits = jax.ops.index_update(
+            logits, jax.ops.index[:config.per_device_batch_size, not_mask],
+            -jnp.inf)
         if config.continual.get("replay_reverse_mask"):
           logits = logits.at[config.per_device_batch_size:,
                              class_mask].set(-jnp.inf)
@@ -545,6 +547,42 @@ def train_and_evaluate_per_task(task_id: int, config: ml_collections.ConfigDict,
       optimizer = optimizer.replace(target=transferred_weights)
       state = state.replace(optimizer=optimizer)
 
+  # Transfer previous learned prompt params to the new prompt
+  if config.prompt_pool and config.prompt_pool_param.shared_prompt_pool:
+    if task_id > 0:
+      prev_start = (task_id - 1) * config.prompt_pool_param.top_k
+      prev_end = task_id * config.prompt_pool_param.top_k
+      cur_start = prev_end
+      cur_end = (task_id + 1) * config.prompt_pool_param.top_k
+      if (prev_end > config.prompt_pool_param.pool_size) or (
+          cur_end > config.prompt_pool_param.pool_size):
+        pass
+      else:
+        param_dict = state.optimizer.target
+        prompt_pool_para = param_dict["prompt_pool"]["prompt"]
+        if config.use_prefix_tune_for_e_prompt:
+          prompt_pool_para = prompt_pool_para.at[:, :, cur_start:cur_end].set(
+              prompt_pool_para[:, :, prev_start:prev_end])
+        else:
+          prompt_pool_para = prompt_pool_para.at[:, cur_start:cur_end].set(
+              prompt_pool_para[:, prev_start:prev_end])
+        param_dict, _ = utils.replace_prompt_pool(param_dict, prompt_pool_para)
+        state = utils.state_with_new_param(state, param_dict)
+
+  # Transfer previous learned prompt param keys to the new prompt
+  if config.prompt_pool and config.prompt_pool_param.prompt_key and config.prompt_pool_param.shared_prompt_key:
+    if task_id > 0:
+      prev_start = (task_id - 1) * config.prompt_pool_param.top_k
+      prev_end = task_id * config.prompt_pool_param.top_k
+      cur_start = prev_end
+      cur_end = (task_id + 1) * config.prompt_pool_param.top_k
+      param_dict = state.optimizer.target
+      prompt_key_para = param_dict["prompt_pool"]["key"]
+      prompt_key_para = prompt_key_para.at[cur_start:cur_end].set(
+          prompt_key_para[prev_start:prev_end])
+      param_dict, _ = utils.replace_prompt_key(param_dict, prompt_key_para)
+      state = utils.state_with_new_param(state, param_dict)
+
   # Build input pipeline.
   rng, data_rng = jax.random.split(rng)
   data_rng = jax.random.fold_in(data_rng, jax.process_index())
@@ -554,7 +592,6 @@ def train_and_evaluate_per_task(task_id: int, config: ml_collections.ConfigDict,
 
   # Learning rate schedule.
   global_batch_size = config.per_device_batch_size * jax.device_count()
-
   # num_train_steps = config.continual.num_train_steps_per_task
   # Hacky operation, currently disable setting the number of training steps.
   num_train_steps = -1
@@ -571,8 +608,10 @@ def train_and_evaluate_per_task(task_id: int, config: ml_collections.ConfigDict,
   if config.eval_every_steps == -1 or config.get("eval_per_epochs"):
     # Show plots in the epoch view (x-axis).
     eval_every_steps = steps_per_epoch * config.get("eval_per_epochs", 1)
+    summary_step_div = steps_per_epoch
   else:
     eval_every_steps = config.eval_every_steps
+    summary_step_div = 1
 
   if review_trick:
     num_review_steps = config.continual.num_review_steps
@@ -585,7 +624,7 @@ def train_and_evaluate_per_task(task_id: int, config: ml_collections.ConfigDict,
     # no matter how many epochs we train, we only eval five times,
     # so the epoch should be > 5
     eval_every_review_steps = steps_per_review_epoch * (num_review_epochs // 5)
-
+    summary_review_step_div = eval_every_review_steps
   else:
     num_review_steps = 0
 
@@ -756,9 +795,10 @@ def train_and_evaluate_per_task(task_id: int, config: ml_collections.ConfigDict,
           else:
             write_flag = False
 
-          if write_flag or is_last_step:
-            writer.write_scalars(summary_step, train_metrics.compute())
-            writer.write_scalars(summary_step, {"task_id": task_id})
+          if (relative_step % summary_step_div == 0) or is_last_step:
+            train_summary_step = relative_step // summary_step_div + task_id * config.num_epochs
+            writer.write_scalars(train_summary_step, train_metrics.compute())
+            writer.write_scalars(train_summary_step, {"task_id": task_id})
             train_metrics = None
 
           # add this setting for gaussian schedule
@@ -830,23 +870,26 @@ def train_and_evaluate_per_task(task_id: int, config: ml_collections.ConfigDict,
   return state, rng
 
 
-def train_and_evaluate(config: ml_collections.ConfigDict, workdir: str):
-  """Runs a training and evaluation loop for sequentially arriving tasks.
-
-  Args:
-    config: Configuration to use.
-    workdir: Working directory for checkpoints and TF summaries. If this
-      contains checkpoint training will be resumed from the latest checkpoint.
-  """
-  # create parent workdir
-  if not tf.io.gfile.exists(workdir):
-    tf.io.gfile.makedirs(workdir)
-
-  # generate random seed
-  rng = jax.random.PRNGKey(config.seed)
-
-  # Build input pipeline, just for initializing model
-  if config.dataset == "cifar100" and config.get("gaussian_schedule"):
+def get_train_eval_components(config: ml_collections.ConfigDict,
+                              rng: jax.random.PRNGKey):
+  """Helper function for generating train and evaluation datasets."""
+  if config.dataset == "5datasets":
+    rng, train_ds_list, eval_ds_list, class_stats_list, class_mask_list = input_pipeline.create_5datasets(
+        config, rng)
+    train_ds = train_ds_list[0]
+  elif config.dataset == "core50":
+    rng, train_ds_list, eval_ds_list, class_stats_list, class_mask_list = input_pipeline.create_core50(
+        config, rng)
+    train_ds = train_ds_list[0]
+  elif config.dataset == "imagenet_r":
+    if config.get("imr_eval"):
+      rng, train_ds_list, eval_ds_list, class_stats_list, class_mask_list = input_pipeline.create_split_imagenet_r_eval(
+          config, rng)
+    else:
+      rng, train_ds_list, eval_ds_list, class_stats_list, class_mask_list = input_pipeline.create_split_imagenet_r(
+          config, rng)
+    train_ds = train_ds_list[0]
+  elif config.dataset == "cifar100" and config.get("gaussian_schedule"):
     create_gaussian_cifar100 = input_pipeline.create_gaussian_cifar100
     rng, train_ds_list, eval_ds_list, class_stats_list, class_mask_list = create_gaussian_cifar100(
         config, rng)
@@ -868,9 +911,33 @@ def train_and_evaluate(config: ml_collections.ConfigDict, workdir: str):
       eval_ds_list.append(eval_ds_sub)
       class_stats_list.append(class_stats)
       class_mask_list.append(class_mask)
+  if ("5datasets" in config.dataset) or ("core50" in config.dataset):
+    num_total_class = 50
+  elif "imagenet_r" in config.dataset:
+    num_total_class = 200
+  else:
+    num_total_class = 100  # ds_info.features["label"].num_classes
+  return rng, train_ds_list, eval_ds_list, class_stats_list, class_mask_list, train_ds, num_total_class
 
-  # Initialize model.
-  num_total_class = 100
+
+def train_and_evaluate(config: ml_collections.ConfigDict, workdir: str):
+  """Runs a training and evaluation loop for sequentially arriving tasks.
+
+  Args:
+    config: Configuration to use.
+    workdir: Working directory for checkpoints and TF summaries. If this
+      contains checkpoint training will be resumed from the latest checkpoint.
+  """
+  # create parent workdir
+  if not tf.io.gfile.exists(workdir):
+    tf.io.gfile.makedirs(workdir)
+
+  # generate random seed
+  rng = jax.random.PRNGKey(config.seed)
+
+  rng, train_ds_list, eval_ds_list, class_stats_list, class_mask_list, train_ds, num_total_class = get_train_eval_components(
+      config, rng)
+
   rng, model_rng = jax.random.split(rng)
   model, state = create_train_state(
       config,

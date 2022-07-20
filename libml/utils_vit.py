@@ -132,13 +132,11 @@ def load_pretrained(*, pretrained_path, init_params, model_config):
     Parameters like `init_params`, but loaded with pretrained weights from
     `pretrained_path` and adapted accordingly.
   """
-  # loading original pretrained ViT model
   restored_params = inspect_params(
       params=load(pretrained_path),
       expected=init_params,
       fail_if_extra=False,
       fail_if_missing=False)
-
 
   # The following allows implementing fine-tuning head variants depending on the
   # value of `representation_size` in the fine-tuning job:
@@ -159,6 +157,8 @@ def load_pretrained(*, pretrained_path, init_params, model_config):
       if key == 'prompt_pool':
         if model_config['prompt_params']['prompt_pool'].prompt_key:
           restored_params[key]['key'] = init_params[key]['key']
+  if 'prefix' in init_params and ('reweight' not in restored_params):
+    restored_params['prefix'] = init_params['prefix']
 
   if 'posembed_input' in restored_params.get('Transformer', {}):
     # Rescale the grid of position embeddings. Param shape is (1,N,1024)

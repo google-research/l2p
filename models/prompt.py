@@ -13,11 +13,13 @@
 # See the License for the specific Learning-to-Prompt governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Prompt module for fine-tuning pretrained models.
+"""Query/Prompt module for selecting task-specific modules.
 
 """
 
-from typing import Callable, Any, Sequence
+import logging
+from typing import Any, Callable, Sequence
+
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -33,7 +35,7 @@ def l2_normalize(x, axis=None, epsilon=1e-12):
   return x * x_inv_norm
 
 
-def prefix_prompt(prompt: Array, x_embed: Array) -> Array:
+def prepend_prompt(prompt: Array, x_embed: Array) -> Array:
   """Concatenates `prompt` to the beginning of `x_embed`.
 
   Args:
@@ -82,10 +84,11 @@ def reinit_from_sample_of_embeddings(rng: Array, shape: Sequence[int],
   return prompt
 
 
-def expand_to_batch(x: Array, batch_size: int):
+def expand_to_batch(x: Array, batch_size: int, axis=0):
   """Expands unbatched `x` to the specified batch_size`."""
-  return jnp.tile(
-      jnp.expand_dims(x, axis=0), [batch_size] + [1 for _ in x.shape])
+  shape = [1 for _ in x.shape]
+  shape.insert(axis, batch_size)
+  return jnp.tile(jnp.expand_dims(x, axis=axis), shape)
 
 
 class Projection(nn.Module):
@@ -107,8 +110,8 @@ class Prompt(nn.Module):
   """Promp module including prompt pool and prompt selection mechanism.
 
   This is the training time version of prompting a model. Calling the injected
-  `prompt` module will generate your batched prompt. This model then
-  concatenates it with the batched input.
+  `prompt` module will generate your unbatched prompt. This model then
+  replicates it for the batched input and concatenates them together.
 
   Attributes:
     length: Length of each prompt.
@@ -119,17 +122,14 @@ class Prompt(nn.Module):
     prompt_key: If use separate prompt key parameters or not.
     pool_size: Size of the prompt pool (number of prompts).
     top_k: Top k prompt to prehend to the input.
-    prompt_projection: Dimension of the projected prompt. Default to be -1,
-      meaning don't use projection.
-    share_projection: If share the projection layer or not.
     batchwise_prompt: If use the same set or prompts for the same batch,
       following majority vote rule.
     prompt_key_init: Initialization ways of the prompt key parameter.
-    task_specific_projection: If use task-specific projection layers or not.
-    complex_projection: If use more complicated projection layers (not
-      recommened).
-    double_side_push: Boolean indicator for the push loss. If set to True, will
-      include future prompts as well.
+    num_classes_per_task: Num of classes per task.
+    num_layers: int = 1 Number of layers to add prompts
+    use_prefix_tune_for_e_prompt: If use prefix-tuning for E-Prompt
+    num_heads: Number of heads for MSA
+    same_key_value: If use the same key and value for prefix-tuning
     num_tasks: Total number of tasks in the continual learning setting.
   """
   length: int
@@ -141,16 +141,40 @@ class Prompt(nn.Module):
   top_k: int = None
   batchwise_prompt: bool = False
   prompt_key_init: str = "zero"
+  num_classes_per_task: int = -1
+  num_layers: int = 1
+  use_prefix_tune_for_e_prompt: bool = False
+  num_heads: int = -1
+  same_key_value: bool = False
   num_tasks: int = 5
 
   @nn.compact
-  def __call__(self, x_embed, prompt_mask=None, task_id=-1, cls_features=None):
+  def __call__(self,
+               x_embed,
+               prompt_mask=None,
+               task_id=-1,
+               cls_features=None,
+               label=None):
     res = dict()
     embed_dim = x_embed.shape[-1]
     if self.prompt_pool:
-      prompt = self.param("prompt", self.prompt_init,
-                          (self.pool_size, self.length, embed_dim))
-      # batched_prompt = prompt
+      if self.use_prefix_tune_for_e_prompt:  # use prefix style
+        assert embed_dim % self.num_heads == 0
+        if self.same_key_value:
+          prompt = self.param("prompt", self.prompt_init,
+                              (self.num_layers, 1, self.pool_size, self.length,
+                               self.num_heads, embed_dim // self.num_heads))
+          prompt = jnp.tile(prompt, (1, 2, 1, 1, 1, 1))
+        else:
+          prompt = self.param("prompt", self.prompt_init,
+                              (self.num_layers, 2, self.pool_size, self.length,
+                               self.num_heads, embed_dim // self.num_heads))
+      else:
+        prompt = self.param(
+            "prompt", self.prompt_init,
+            (self.num_layers, self.pool_size, self.length, embed_dim))
+
+      # now get key matching part.
       if self.embedding_key == "mean":
         x_embed_mean = jnp.mean(x_embed, axis=1)  # bs, emb
       elif self.embedding_key == "max":
@@ -167,57 +191,81 @@ class Prompt(nn.Module):
             "Not supported way of calculating embedding keys!")
       # if using learnable prompt keys
       if self.prompt_key:
+        key_shape = (self.pool_size, embed_dim)
         if self.prompt_key_init == "zero":
-          prompt_key = self.param("key", nn.initializers.zeros,
-                                  (self.pool_size, embed_dim))
+          prompt_key = self.param("key", nn.initializers.zeros, key_shape)
         elif self.prompt_key_init == "uniform":
-          prompt_key = self.param("key", nn.initializers.uniform(),
-                                  (self.pool_size, embed_dim))
-      # else use mean of prompt as key
+          prompt_key = self.param("key", nn.initializers.uniform(), key_shape)
       else:
-        prompt_mean = jnp.mean(prompt, axis=1)  # pool_size, emb
+        # only compatible with prompt, not prefix
+        prompt_mean = jnp.mean(prompt, axis=[0, 2])  # pool_size, emb
         prompt_key = prompt_mean
 
-      prompt_norm = l2_normalize(prompt_key, axis=1)
-      x_embed_norm = l2_normalize(x_embed_mean, axis=1)
+      prompt_key_norm = l2_normalize(prompt_key, axis=-1)
+      x_embed_norm = l2_normalize(x_embed_mean, axis=-1)
 
-      sim = jnp.matmul(x_embed_norm,
-                       jnp.transpose(prompt_norm))  # bs, pool_size
-      if prompt_mask is None:
-        (_, idx) = jax.lax.top_k(sim, self.top_k)
-        if self.batchwise_prompt:
-          prompt_id, id_counts = jnp.unique(
-              idx, return_counts=True, size=self.pool_size)
-          _, major_idx = jax.lax.top_k(id_counts, self.top_k)
-          major_prompt_id = prompt_id[major_idx]
-          idx = expand_to_batch(major_prompt_id, x_embed.shape[0])
-      else:
+      sim = jnp.matmul(prompt_key_norm, jnp.transpose(
+          x_embed_norm))  # pool_size, bs or pool_size, #class, bs
+      sim = jnp.transpose(sim)  # bs, pool_size
+      (sim_top_k, idx) = jax.lax.top_k(sim, self.top_k)
+      if self.batchwise_prompt:
+        prompt_id, id_counts = jnp.unique(
+            idx, return_counts=True, size=self.pool_size)
+        _, major_idx = jax.lax.top_k(id_counts, self.top_k)
+        major_prompt_id = prompt_id[major_idx]
+        idx = expand_to_batch(major_prompt_id, x_embed.shape[0])
+
+      if prompt_mask is not None:
         idx = prompt_mask  # bs, allowed_size
-      batched_prompt_raw = jnp.take(
-          prompt, idx, axis=0)  # bs, allowed_size, prompt_len, embed_dim
-      bs, allowed_size, prompt_len, embed_dim = batched_prompt_raw.shape
-      batched_prompt = jnp.reshape(batched_prompt_raw,
-                                   (bs, allowed_size * prompt_len, embed_dim))
       res["prompt_idx"] = idx
+      batched_key_norm = jnp.take(
+          prompt_key_norm, idx, axis=0)  # bs, top_k, embed_dim
+      res["selected_key"] = batched_key_norm
 
-      # Debugging, return sim as well
-      res["prompt_norm"] = prompt_norm
+      if self.use_prefix_tune_for_e_prompt:
+        batched_prompt_raw = jnp.take(
+            prompt, idx,
+            axis=2)  # num_layers, bs, allowed_size, prompt_len, embed_dim
+        num_layers, bs, dual, allowed_size, prompt_len, num_heads, heads_embed_dim = batched_prompt_raw.shape
+        batched_prompt = jnp.reshape(batched_prompt_raw,
+                                     (num_layers, bs, dual, allowed_size *
+                                      prompt_len, num_heads, heads_embed_dim))
+      else:
+        batched_prompt_raw = jnp.take(
+            prompt, idx,
+            axis=1)  # num_layers, bs, allowed_size, prompt_len, embed_dim
+        num_layers, bs, allowed_size, prompt_len, embed_dim = batched_prompt_raw.shape
+        batched_prompt = jnp.reshape(
+            batched_prompt_raw,
+            (num_layers, bs, allowed_size * prompt_len, embed_dim))
+      res["batched_prompt"] = batched_prompt
+      res["prompt_key_norm"] = prompt_key_norm
       res["x_embed_norm"] = x_embed_norm
       res["sim"] = sim
 
       # Put pull_constraint loss calculation inside
-      batched_key_norm = jnp.take(
-          prompt_norm, idx, axis=0)  # bs, top_k, embed_dim
-      res["selected_key"] = batched_key_norm
-
       x_embed_norm = x_embed_norm[:, jnp.newaxis, :]  # bs, 1, embed_dim
-      sim = batched_key_norm * x_embed_norm
-      reduce_sim = jnp.sum(sim) / x_embed.shape[0]
-
+      sim_pull = batched_key_norm * x_embed_norm
+      reduce_sim = jnp.sum(sim_pull) / x_embed.shape[0]
       res["reduce_sim"] = reduce_sim
-    else:
-      prompt = self.param("prompt", self.prompt_init, (self.length, embed_dim))
-      batched_prompt = expand_to_batch(prompt, x_embed.shape[0])
 
-    res["prompted_embedding"] = prefix_prompt(batched_prompt, x_embed)
+    else:
+      if self.use_prefix_tune_for_e_prompt:  # use prefix style
+        assert embed_dim % self.num_heads == 0
+        if self.same_key_value:
+          prompt = self.param("prompt", self.prompt_init,
+                              (self.num_layers, 1, self.length, self.num_heads,
+                               embed_dim // self.num_heads))
+          prompt = jnp.tile(prompt, (1, 2, 1, 1, 1))
+        else:
+          prompt = self.param("prompt", self.prompt_init,
+                              (self.num_layers, 2, self.length, self.num_heads,
+                               embed_dim // self.num_heads))
+        batched_prompt = expand_to_batch(prompt, x_embed.shape[0], axis=2)
+      else:
+        prompt = self.param("prompt", self.prompt_init,
+                            (self.num_layers, self.length, embed_dim))
+        batched_prompt = expand_to_batch(prompt, x_embed.shape[0], axis=1)
+
+    res["batched_prompt"] = batched_prompt
     return res

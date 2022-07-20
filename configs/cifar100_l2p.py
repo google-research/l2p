@@ -13,28 +13,30 @@
 # See the License for the specific Learning-to-Prompt governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""A config for L2P on split cifar100."""
+"""A config for continual learning."""
 
 import ml_collections
 
 
 def get_config():
-  """Return config files for split cifar100."""
+  """Return config files for L2P on split CIFAR100."""
   config = ml_collections.ConfigDict()
-  config.model_name = "ViT-B_16"
+  config.model_name = "ViT-B_16"  # support various sized ViT models
   config.per_device_batch_size = 16
 
   config.dataset = "cifar100"
-
+  # Gaussian schedule for cifar100
   config.gaussian_schedule = False
+  config.gaussian_mode = ""
 
+  config.offline_eval = False
+  config.recreate_eval = False
   config.reinit_optimizer = True
-
   config.eval_last_only = False
   config.save_last_ckpt_only = True
 
   config.learning_rate = 0.03
-  config.optim = "adam"
+  config.optim = "adam"  # use "sgd" if unfreeze
   config.sgd_momentum = 0.9
   config.grad_clip_max_norm = 1.0
   config.learning_rate_schedule = "constant"
@@ -45,77 +47,92 @@ def get_config():
   config.eval_pad_last_batch = False
   config.log_loss_every_steps = 3
   config.eval_every_steps = -1
-
   config.checkpoint_every_steps = 5000
   config.shuffle_buffer_size = 10000
 
   config.seed = 42
   config.trial = 0
 
+  # resize cifar as imagenet input
   config.input_size = 224
   config.resize_size = 256
-
   config.model_config = None
   # load pretrained model
   config.init_checkpoint = ml_collections.FieldReference(None, field_type=str)
 
-  # continual learning
+  # configuration for CL
   config.continual = ml_collections.ConfigDict()
   config.continual.num_tasks = 10
   config.continual.num_classes_per_task = 10
   config.continual.rand_seed = -1
   config.continual.num_train_steps_per_task = -1
   config.continual.train_mask = True
+  # if doing task incremental
   config.continual.eval_task_inc = False
 
-  # if normalizing pre-logits, optional
+  # if normalizing pre-logits
   config.norm_pre_logits = False
   config.weight_norm = False
   config.temperature = 1
-
-  # important! if using 0-1 normalization
+  # if using 0-1 normalization for input image
   config.norm_01 = True
   config.reverse_task = False
 
-  # Parameters for using class token or not
+  # configuration for [cls] token
   config.use_cls_token = True
-
-  # if using task-specific class token
   config.task_specific_cls_token = False
 
-  # Parameters for using prompt tuning
-  config.use_prompt = True
-
-  # Parameters for ViT classifier using
-  # choose from "token", "gap", "prompt" and "token+prompt"
+  # classification option for ViT
   config.vit_classifier = "prompt"
-  # Parameters for prompt pool
+
+  # do not use G-Prompt in L2P
+  config.use_g_prompt = False
+
+  # use basic position and prompt-tuning of E-Prompt for L2P
+  config.use_e_prompt = True  # Use E-Prompt
+  config.e_prompt_layer_idx = [0]
+  config.use_prefix_tune_for_e_prompt = False
+
+  # configuration for L2P
   config.prompt_pool = True
   config.prompt_pool_param = ml_collections.ConfigDict()
   config.prompt_pool_param.pool_size = 10
-  config.prompt_pool_param.length = 5
-  config.prompt_pool_param.top_k = 5
+  config.prompt_pool_param.length = 10
+  config.prompt_pool_param.top_k = 4
   config.prompt_pool_param.initializer = "uniform"
   config.prompt_pool_param.prompt_key = True
   config.prompt_pool_param.use_prompt_mask = False
+  config.prompt_pool_param.mask_first_epoch = False
+
+  config.prompt_pool_param.shared_prompt_pool = False
+  config.prompt_pool_param.shared_prompt_key = False
   config.prompt_pool_param.batchwise_prompt = True
-
   config.prompt_pool_param.prompt_key_init = "uniform"
-
   config.prompt_pool_param.embedding_key = "cls"
-
   config.predefined_key_path = ""
 
-  # freeze
+  # freeze model parts
   config.freeze_part = ["encoder", "embedding", "cls"]
   config.freeze_bn_stats = False
 
+  # subsample dataset or not
   config.subsample_rate = -1
-
-  config.prompt_histogram = True
-
+  # key loss
   config.pull_constraint = True
-  config.pull_constraint_coeff = 0.1
+  config.pull_constraint_coeff = 1.0
+
+  # prompt utils
+  config.prompt_histogram = True
+  config.prompt_mask_mode = None
+  config.save_prompts = False
+
+
+  # if doing replay trick, not that if using replay with L2P, make sure
+  # to set config.freeze_part = [], ie, not freezing for better adaptation
+  # config.continual.replay = ml_collections.ConfigDict()
+  # config.continual.replay.num_samples_per_task = 100
+  # config.continual.replay.include_new_task = True
+  # config.continual.replay_no_mask = True
+  # config.continual.replay_reverse_mask = False
 
   return config
-

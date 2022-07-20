@@ -19,35 +19,35 @@ import ml_collections
 
 
 def get_config():
-  """Return config files for L2P on Gaussian CIFAR100."""
+  """Return config files for DualPrompt on split ImageNet-R."""
   config = ml_collections.ConfigDict()
-  config.model_name = "ViT-B_16"
-  config.per_device_batch_size = 16
+  config.model_name = "ViT-B_16"  # support various sized ViT models
+  config.per_device_batch_size = 24
 
-  config.dataset = "cifar100"
+  config.dataset = "imagenet_r"
   # Gaussian schedule for cifar100
-  config.gaussian_schedule = True
+  config.gaussian_schedule = False
   config.gaussian_mode = ""
 
   config.offline_eval = False
   config.recreate_eval = False
-  config.reinit_optimizer = False
+  config.reinit_optimizer = True
   config.eval_last_only = False
   config.save_last_ckpt_only = True
 
-  config.learning_rate = 0.03
+  config.learning_rate = 0.005
   config.optim = "adam"
   config.sgd_momentum = 0.9
   config.grad_clip_max_norm = 1.0
   config.learning_rate_schedule = "constant"
   config.warmup_epochs = 0
   config.weight_decay = 0
-  config.num_epochs = 5
+  config.num_epochs = 50  # number of epochs per task
   config.num_eval_steps = -1
   config.eval_pad_last_batch = False
   config.log_loss_every_steps = 3
   config.eval_every_steps = -1
-  config.eval_per_epochs = 100
+  config.eval_per_epochs = 10
   config.checkpoint_every_steps = 5000
   config.shuffle_buffer_size = 10000
 
@@ -63,8 +63,8 @@ def get_config():
 
   # configuration for CL
   config.continual = ml_collections.ConfigDict()
-  config.continual.num_tasks = 200
-  config.continual.num_classes_per_task = 100
+  config.continual.num_tasks = 10
+  config.continual.num_classes_per_task = 20
   config.continual.rand_seed = -1
   config.continual.num_train_steps_per_task = -1
   config.continual.train_mask = True
@@ -75,7 +75,7 @@ def get_config():
   config.norm_pre_logits = False
   config.weight_norm = False
   config.temperature = 1
-  # important! if using 0-1 normalization
+  # if using 0-1 normalization for input image
   config.norm_01 = True
   config.reverse_task = False
 
@@ -84,30 +84,33 @@ def get_config():
   config.task_specific_cls_token = False
 
   # classification option for ViT
-  config.vit_classifier = "prompt"
+  config.vit_classifier = "token"
 
-  # do not use G-Prompt in L2P
-  config.use_g_prompt = False
+  # configuration for G-Prompt
+  config.use_g_prompt = True
+  config.g_prompt_length = 5
+  config.g_prompt_layer_idx = [0, 1]
+  config.use_prefix_tune_for_g_prompt = True
 
-  # use basic position and prompt-tuning of E-Prompt for L2P
-  config.use_e_prompt = True  # Use E-Prompt
-  config.e_prompt_layer_idx = [0]
-  config.use_prefix_tune_for_e_prompt = False
+  # configuration for E-Prompt
+  config.use_e_prompt = True
+  config.e_prompt_layer_idx = [2, 3, 4]
+  config.use_prefix_tune_for_e_prompt = True
 
-  # configuration for L2P
+  # Use prompt pool in L2P to implement E-Prompt
   config.prompt_pool = True
   config.prompt_pool_param = ml_collections.ConfigDict()
   config.prompt_pool_param.pool_size = 10
-  config.prompt_pool_param.length = 10
-  config.prompt_pool_param.top_k = 4
+  config.prompt_pool_param.length = 20
+  config.prompt_pool_param.top_k = 1
   config.prompt_pool_param.initializer = "uniform"
   config.prompt_pool_param.prompt_key = True
-  config.prompt_pool_param.use_prompt_mask = False
+  config.prompt_pool_param.use_prompt_mask = True
   config.prompt_pool_param.mask_first_epoch = False
 
-  config.prompt_pool_param.shared_prompt_pool = False
+  config.prompt_pool_param.shared_prompt_pool = True
   config.prompt_pool_param.shared_prompt_key = False
-  config.prompt_pool_param.batchwise_prompt = True
+  config.prompt_pool_param.batchwise_prompt = False
   config.prompt_pool_param.prompt_key_init = "uniform"
   config.prompt_pool_param.embedding_key = "cls"
   config.predefined_key_path = ""
@@ -123,7 +126,7 @@ def get_config():
   config.pull_constraint_coeff = 1.0
 
   # prompt utils
-  config.prompt_histogram = False
+  config.prompt_histogram = True
   config.prompt_mask_mode = None
   config.save_prompts = False
 

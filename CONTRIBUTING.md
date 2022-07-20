@@ -1,5 +1,5 @@
 How to Contribute
-SimCLR needs to maintain permanent compatibility with the pre-trained model files, so we do not plan to make any major changes to this library (other than what was promised in the README). However, we can accept small patches related to re-factoring and documentation. To submit contributes, there are just a few small guidelines you need to follow.
+L2P/DualPrompt needs to maintain permanent compatibility with the pre-trained model files, so we do not plan to make any major changes to this library (other than what was promised in the README). However, we can accept small patches related to re-factoring and documentation. To submit contributes, there are just a few small guidelines you need to follow.
 
 Contributor License Agreement
 Contributions to this project must be accompanied by a Contributor License Agreement. You (or your employer) retain the copyright to your contribution; this simply gives us permission to use and redistribute your contributions as part of the project. Head over to https://cla.developers.google.com/ to see your current agreements on file or to sign a new one.

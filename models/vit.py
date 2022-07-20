@@ -16,12 +16,12 @@
 """Implementation of Vision Transformer in JAX."""
 
 import functools
-from typing import Any, Callable, Optional, Tuple, Dict
+from typing import Any, Callable, Optional, Tuple
 
 import flax.linen as nn
 import jax.numpy as jnp
 import ml_collections
-
+from models import prefix_attention
 from models import prompt
 
 Array = Any
@@ -122,6 +122,7 @@ class Encoder1DBlock(nn.Module):
   dtype: Dtype = jnp.float32
   dropout_rate: float = 0.1
   attention_dropout_rate: float = 0.1
+  prefix_layer: Any = None
 
   @nn.compact
   def __call__(self, inputs, *, deterministic):
@@ -138,13 +139,14 @@ class Encoder1DBlock(nn.Module):
     # Attention block.
     assert inputs.ndim == 3, f'Expected (batch, seq, hidden) got {inputs.shape}'
     x = nn.LayerNorm(dtype=self.dtype)(inputs)
-    x = nn.MultiHeadDotProductAttention(
+    x = prefix_attention.MultiHeadDotProductAttention(
         dtype=self.dtype,
         kernel_init=nn.initializers.xavier_uniform(),
         broadcast_dropout=False,
         deterministic=deterministic,
         dropout_rate=self.attention_dropout_rate,
-        num_heads=self.num_heads)(x, x)
+        num_heads=self.num_heads,
+        prefix=self.prefix_layer)(x, x)
     x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=deterministic)
     x = x + inputs
 
@@ -171,6 +173,12 @@ class Encoder(nn.Module):
   num_layers: int
   mlp_dim: int
   num_heads: int
+  prefix: Any
+  g_prompt_layer_idx: Any
+  prompt: Any
+  e_prompt_layer_idx: Any
+  use_prefix_tune_for_e_prompt: bool = True
+  use_prefix_tune_for_g_prompt: bool = True
   dropout_rate: float = 0.1
   attention_dropout_rate: float = 0.1
 
@@ -194,13 +202,54 @@ class Encoder(nn.Module):
     x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not train)
 
     # Input Encoder
+    # counter for prompts
+    prompt_counter = -1
+    prefix_layer = None
+    batched_prompt = None
     for lyr in range(self.num_layers):
+      prefix_layer = None
+      batched_prompt = None
+      if (self.prefix is not None) and (lyr in self.g_prompt_layer_idx):
+        if not self.use_prefix_tune_for_g_prompt:
+          batched_prompt = self.prefix[lyr]  # len * hiddensize
+          batched_prompt = prompt.expand_to_batch(
+              batched_prompt, batch_size=x.shape[0])
+        else:
+          prefix_layer = self.prefix[lyr]
+          # batch it here
+          prefix_layer = prompt.expand_to_batch(
+              prefix_layer, batch_size=x.shape[0], axis=1)
+      else:
+        prefix_layer = None
+      if self.prompt is not None:
+        if isinstance(self.e_prompt_layer_idx, int):
+          self.e_prompt_layer_idx = [self.e_prompt_layer_idx]
+        if lyr in self.e_prompt_layer_idx:
+          prompt_counter += 1
+          if self.use_prefix_tune_for_e_prompt:
+            if prefix_layer is not None:
+              # concatenate shared prompt/prefix with this prefix
+              prefix_layer = jnp.concatenate(
+                  [prefix_layer, self.prompt[prompt_counter]], axis=-3)
+            else:
+              prefix_layer = self.prompt[prompt_counter]
+          else:
+            # do the concatenation here
+            if batched_prompt is not None:
+              batched_prompt = jnp.concatenate(
+                  [batched_prompt, self.prompt[prompt_counter]], axis=-2)
+              x = prompt.prepend_prompt(batched_prompt, x)
+            else:
+              batched_prompt = self.prompt[prompt_counter]
+              x = prompt.prepend_prompt(batched_prompt, x)
+
       x = Encoder1DBlock(
           mlp_dim=self.mlp_dim,
           dropout_rate=self.dropout_rate,
           attention_dropout_rate=self.attention_dropout_rate,
           name=f'encoderblock_{lyr}',
-          num_heads=self.num_heads)(
+          num_heads=self.num_heads,
+          prefix_layer=prefix_layer)(
               x, deterministic=not train)
     encoded = nn.LayerNorm(name='encoder_norm')(x)
 
@@ -239,12 +288,20 @@ class VisionTransformer(nn.Module):
   representation_size: Optional[int] = None
   classifier: str = 'token'
   use_cls_token: bool = True
-  prompt_params: Dict[str, Any] = None
+  prompt_params: Any = None
   reweight_prompt: bool = False
   num_tasks: int = -1
+  prefix_params: Any = None
+  prompt_contrastive_temp: float = -1.0
+  num_classes_per_task: int = -1
 
   @nn.compact
-  def __call__(self, inputs, prompt_mask=None, task_id=-1, cls_features=None):
+  def __call__(self,
+               inputs,
+               prompt_mask=None,
+               task_id=-1,
+               cls_features=None,
+               label=None):
     res_vit = dict()
     x = inputs
     n, h, w, c = x.shape
@@ -258,13 +315,63 @@ class VisionTransformer(nn.Module):
         name='embedding')(
             x)
 
+    # 12.12: init prefix
+    use_prefix_tune_for_g_prompt = True
+    if self.prefix_params:
+      n_layers = self.transformer.num_layers
+      n_heads = self.transformer.num_heads
+      # prefix_len,
+      g_prompt_length = self.prefix_params['g_prompt_length']
+      g_prompt_layer_idx = self.prefix_params['g_prompt_layer_idx']
+      embedding_size = self.hidden_size // n_heads
+      if not self.prefix_params['use_prefix_tune_for_g_prompt']:
+        use_prefix_tune_for_g_prompt = False
+        prefix = self.param('prefix', nn.initializers.uniform(),
+                            (n_layers, g_prompt_length, self.hidden_size))
+      else:
+        # 1.4: added for the same key and value
+        if self.prefix_params['same_key_value']:
+          prefix = self.param(
+              'prefix', nn.initializers.uniform(),
+              (n_layers, 1, g_prompt_length, n_heads, embedding_size))
+          prefix = jnp.tile(prefix, (1, 2, 1, 1, 1))
+        else:
+          prefix = self.param(
+              'prefix', nn.initializers.uniform(),
+              (n_layers, 2, g_prompt_length, n_heads, embedding_size))
+    else:
+      prefix = None
+      g_prompt_layer_idx = []
+
+    if self.prefix_params:
+      if not self.prefix_params['use_prefix_tune_for_g_prompt']:
+        total_prompt_len = self.prefix_params['g_prompt_length'] * len(
+            self.prefix_params['g_prompt_layer_idx'])
+
     # Here, x is a grid of embeddings.
+    batched_prompt = None
+    use_prefix_tune_for_e_prompt = False
+    same_key_value_for_pool = False
+    e_prompt_layer_idx = []
     if self.transformer is not None:
       n, h, w, c = x.shape
       x = jnp.reshape(x, [n, h * w, c])
       # res_vit["embedding"] = x
       # put it after class token for now
       if self.prompt_params is not None:
+        # set up number of layers
+        if isinstance(self.prompt_params['e_prompt_layer_idx'], int):
+          num_prompted_layers = 1
+        else:
+          num_prompted_layers = len(self.prompt_params['e_prompt_layer_idx'])
+        # set up if using prefix-style prompts or not
+        use_prefix_tune_for_e_prompt = self.prompt_params[
+            'use_prefix_tune_for_e_prompt']
+        if use_prefix_tune_for_e_prompt:
+          same_key_value_for_pool = self.prompt_params['same_key_value']
+        e_prompt_layer_idx = self.prompt_params['e_prompt_layer_idx']
+        # set up number of heads for prefix
+        num_heads = self.transformer.num_heads
         if 'prompt_pool' in self.prompt_params:  # pylint: disable=unsupported-membership-test
           prompt_pool_params = self.prompt_params['prompt_pool']
           if prompt_pool_params.initializer == 'normal':
@@ -283,26 +390,35 @@ class VisionTransformer(nn.Module):
               top_k=prompt_pool_params.top_k,
               batchwise_prompt=prompt_pool_params.batchwise_prompt,
               prompt_key_init=prompt_pool_params.prompt_key_init,
-              num_tasks=self.num_tasks)  # 9.6: added for getting cls features
-          res_prompt = prompt_pool_module(
-              x, prompt_mask, task_id=task_id, cls_features=cls_features)
-          x = res_prompt['prompted_embedding']
-          # For debugging purpose
-          res_vit['sim'] = res_prompt['sim']
-          res_vit['prompt_norm'] = res_prompt['prompt_norm']
-          res_vit['x_embed_norm'] = res_prompt['x_embed_norm']
-          res_vit['prompted_embedding'] = res_prompt['prompted_embedding']
-          res_vit['prompt_idx'] = res_prompt['prompt_idx']
-          res_vit['selected_key'] = res_prompt['selected_key']
-          res_vit['reduce_sim'] = res_prompt['reduce_sim']
-        # calculate the length of all prompts
+              num_classes_per_task=self
+              .num_classes_per_task,
+              num_layers=num_prompted_layers,
+              use_prefix_tune_for_e_prompt=use_prefix_tune_for_e_prompt,
+              num_heads=num_heads,
+              num_tasks=self.num_tasks,
+          )
+          res_vit = prompt_pool_module(
+              x,
+              prompt_mask,
+              task_id=task_id,
+              cls_features=cls_features,
+              label=label)
+        batched_prompt = res_vit['batched_prompt']
         total_prompt_len = 0
+        if self.prefix_params:
+          if not self.prefix_params['use_prefix_tune_for_g_prompt']:
+            total_prompt_len += self.prefix_params['g_prompt_length'] * len(
+                self.prefix_params['g_prompt_layer_idx'])
         for key in self.prompt_params:  # pylint: disable=not-an-iterable
-          if key == 'prompt_pool':
-            total_prompt_len += (
-                self.prompt_params[key].length * self.prompt_params[key].top_k)
-          else:
-            total_prompt_len += self.prompt_params[key].length
+          if not use_prefix_tune_for_e_prompt:
+            if key == 'prompt_pool':
+              # make it multi-layered prompts
+              total_prompt_len += self.prompt_params[
+                  key].length * self.prompt_params[
+                      key].top_k * num_prompted_layers
+            elif key == 'shared_prompt' or key == 'task_specific_prompt':
+              total_prompt_len += self.prompt_params[
+                  key].length * num_prompted_layers
 
       # If we want to add a class token, add it here.
       if self.use_cls_token:
@@ -310,16 +426,26 @@ class VisionTransformer(nn.Module):
         cls = jnp.tile(cls, [n, 1, 1])
         x = jnp.concatenate([cls, x], axis=1)
 
-      x = Encoder(name='Transformer', **self.transformer)(x, train=self.train)
+      x = Encoder(
+          name='Transformer',
+          prefix=prefix,
+          g_prompt_layer_idx=g_prompt_layer_idx,
+          prompt=batched_prompt,
+          e_prompt_layer_idx=e_prompt_layer_idx,
+          use_prefix_tune_for_e_prompt=use_prefix_tune_for_e_prompt,
+          use_prefix_tune_for_g_prompt=use_prefix_tune_for_g_prompt,
+          **self.transformer)(
+              x, train=self.train)
 
     if self.use_cls_token and self.classifier == 'token':
-      x = x[:, 0]
+      if self.prompt_params:
+        x = x[:, total_prompt_len]
+      else:
+        x = x[:, 0]
     elif self.classifier == 'gap':
       x = jnp.mean(x, axis=list(range(1, x.ndim - 1)))  # (1,) or (1,2)
-    elif self.prompt_params and self.classifier == 'prompt':
-      x = x[:, 1:(
-          1 +
-          total_prompt_len)] if self.use_cls_token else x[:, 0:total_prompt_len]
+    elif self.classifier == 'prompt':
+      x = x[:, 0:total_prompt_len]
       if self.reweight_prompt:
         reweight = self.param('reweight', nn.initializers.uniform(),
                               (total_prompt_len,))
@@ -332,7 +458,7 @@ class VisionTransformer(nn.Module):
       x = jnp.mean(x, axis=1)
     else:
       raise ValueError(f'Invalid classifier={self.classifier}')
-    # 9.6 added for utilizing pretrained features
+    # Added for utilizing pretrained features
     res_vit['pre_logits'] = x
     if self.representation_size is not None:
       x = nn.Dense(features=self.representation_size, name='pre_logits')(x)
@@ -503,6 +629,24 @@ def get_h14_config():
   return config
 
 
+@_register
+def get_s16_config():
+  """Returns the ViT-S/16 configuration."""
+  config = ml_collections.ConfigDict()
+  config.name = 'ViT-S_16'
+  config.patches = ml_collections.ConfigDict({'size': (16, 16)})
+  config.hidden_size = 384
+  config.transformer = ml_collections.ConfigDict()
+  config.transformer.mlp_dim = 1536
+  config.transformer.num_heads = 6
+  config.transformer.num_layers = 12
+  config.transformer.attention_dropout_rate = 0.0
+  config.transformer.dropout_rate = 0.0
+  config.classifier = 'token'
+  config.representation_size = None
+  return config
+
+
 def create_model(name, config):
   """Creates model partial function."""
   # del config
@@ -516,25 +660,40 @@ def create_model(name, config):
     model_config['norm_pre_logits'] = config.norm_pre_logits
   if config.get('temperature'):
     model_config['temperature'] = config.temperature
-  if config.use_prompt:
-    # 8.3: refactored the prompt parts to be shared and task-specific
+  if config.get('use_e_prompt'):
     prompt_params = {}
+    # Specify which layer the prompt should be add on
+    prompt_params['e_prompt_layer_idx'] = config.get('e_prompt_layer_idx')
+    # Using prefix-tuning for E-Prompt
+    prompt_params['use_prefix_tune_for_e_prompt'] = config.get('use_prefix_tune_for_e_prompt')
+    # If using the same key and value in prefix
+    prompt_params['same_key_value'] = config.get('same_key_value_for_pool')
     if config.prompt_pool:
       prompt_params['prompt_pool'] = config.prompt_pool_param
     model_config['prompt_params'] = prompt_params
-  if config.use_cls_token:
-    model_config['use_cls_token'] = config.use_cls_token
-  if config.vit_classifier:
+
+  if config.get('use_g_prompt'):
+    prefix_params = {}
+    prefix_params['g_prompt_length'] = config.g_prompt_length
+    prefix_params['g_prompt_layer_idx'] = config.g_prompt_layer_idx
+    prefix_params['same_key_value'] = config.get('same_key_value_for_shared')
+    prefix_params['use_prefix_tune_for_g_prompt'] = config.get(
+        'use_prefix_tune_for_g_prompt')
+    model_config['prefix_params'] = prefix_params
+
+  model_config['use_cls_token'] = config.get('use_cls_token')
+  if config.get('vit_classifier'):
     model_config['classifier'] = config.vit_classifier
   if config.get('reweight_prompt'):
     model_config['reweight_prompt'] = config.reweight_prompt
-  model_config['num_tasks'] = config.continual.num_tasks
+  if config.get('continual'):
+    model_config['num_tasks'] = config.continual.num_tasks
+    model_config['num_classes_per_task'] = config.continual.num_classes_per_task
   model_config = ml_collections.ConfigDict(model_config)
   return functools.partial(VisionTransformer, **model_config), model_config
 
 
 def create_original_vit(name):
-  """Creates original ViT for key feature generation."""
   if name not in MODEL_CONFIGS:
     raise ValueError(f'Model {name} does not exist.')
   model_config = MODEL_CONFIGS[name]
