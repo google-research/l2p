@@ -9,7 +9,7 @@ L2P is a novel continual learning technique which learns to dynamically prompt a
 </p>
 DualPrompt improves upon L2P by attaching complementary prompts to the pre-trained backbone, and then formulates the objective as learning task-invariant and task-specific “instructions". With extensive experimental validation, DualPrompt consistently sets state-of-the-art performance under the challenging class-incremental setting. In particular, DualPrompt outperforms recent advanced continual learning methods with relatively large buffer sizes. We also introduce a more challenging benchmark, Split ImageNet-R, to help generalize rehearsal-free continual learning research.
 <p align="center">
-<img src="./dualprompt_illustration.png" width="850" height="320">
+<img src="./dualprompt_illustration.png" width="850" height="240">
 </p>
 
 
@@ -87,7 +87,9 @@ Here are the important metrics to keep track of, and their corresponding meaning
   pages={139--149},
   year={2022}
 }
+```
 
+```
 @article{wang2022dualprompt,
   title={DualPrompt: Complementary Prompting for Rehearsal-free Continual Learning},
   author={Wang, Zifeng and Zhang, Zizhao and Ebrahimi, Sayna and Sun, Ruoxi and Zhang, Han and Lee, Chen-Yu and Ren, Xiaoqi and Su, Guolong and Perot, Vincent and Dy, Jennifer and others},
