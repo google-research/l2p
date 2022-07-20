@@ -38,7 +38,7 @@ ViT-B/16 model used in this paper can be downloaded at [here](https://storage.go
 Note: Our codebase actually supports various sizes of ViTs. If you would like to try variations of ViTs, feel free to change the `config.model_name` in the config files, following the valid options defined in [vit.py](models/vit.py).
 
 
-## Instructions on running L2P
+## Instructions on running L2P and DualPrompt
 We provide the configuration file to train and evaluate L2P and DualPrompt on multiple benchmarks in [configs](configs/).
 
 
