@@ -21,7 +21,7 @@ Code is written by Zifeng Wang. Acknowledgement to https://github.com/google-res
 This is not an officially supported Google product.
 
 ## Novel CL benchmark: Split ImageNet-R
-The Split ImageNet-R benchmark is build upon [ImageNet-R](https://www.tensorflow.org/datasets/catalog/imagenet_r) by dividing the 200 classes into 10 tasks with 20 classes per task, see [libml/input_pipeline.py](libml/inputpipeline.py) for details. We believe the Split ImageNet-R is of great importance to the continual learning community, for the following reasons:
+The Split ImageNet-R benchmark is build upon [ImageNet-R](https://www.tensorflow.org/datasets/catalog/imagenet_r) by dividing the 200 classes into 10 tasks with 20 classes per task, see [libml/input_pipeline.py](libml/input_pipeline.py) for details. We believe the Split ImageNet-R is of great importance to the continual learning community, for the following reasons:
 
 - Split ImageNet-R contains classes with different styles, which is closer to the complicated real-world problems.
 - The significant intra-class diversity poses a great challenge for rehearsal-based methods to work effectively with a small buffer size, thus encouraging the development of more practical, rehearsal-free methods.
@@ -40,7 +40,7 @@ Before running experiments for 5-datasets and CORe50, additional dataset prepara
 
 1. Download CORe50 classification benchmark here: https://vlomonaco.github.io/core50/ and download not-mnist here: http://yaroslavvb.com/upload/notMNIST/
 2. Transform them into TFDS compatible form following the tutorial in https://www.tensorflow.org/datasets/add_dataset
-3. Replace corresponding dataset paths `"PATH_TO_CORE50"` and `"PATH_TO_NOT_MNIST"` in [libml/inputpipeline.py](libml/input_pipeline.py) by the destination paths in step 2
+3. Replace corresponding dataset paths `"PATH_TO_CORE50"` and `"PATH_TO_NOT_MNIST"` in [libml/input_pipeline.py](libml/input_pipeline.py) by the destination paths in step 2
 
 
 ## Getting pretrained ViT model
