@@ -27,6 +27,10 @@ The Split ImageNet-R benchmark is build upon [ImageNet-R](https://www.tensorflow
 - The significant intra-class diversity poses a great challenge for rehearsal-based methods to work effectively with a small buffer size, thus encouraging the development of more practical, rehearsal-free methods.
 - Pre-trained vision models are useful in practical continual learning. However, their training set usually includes ImageNet. Thus, Split ImageNet-R serves as a relative fair and challenging benchmark, and an alternative to ImageNet-based benchmarks for continual learning that uses pre-trained models.
 
+## PyTorch Reimplementation
+The codebase has been reimplemented in PyTorch by Jaeho Lee in [l2p-pytorch](https://github.com/JH-LEE-KR/l2p-pytorch) and [dualprompt-pytorch](https://github.com/JH-LEE-KR/dualprompt-pytorch).
+
+
 ## Enviroment setup
 ```
 pip install -r requirements.txt
